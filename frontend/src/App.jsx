@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import './App.css';
 
-const API_BASE = 'http://localhost:5000';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000';
 
 // ── Avatar gradient palette (deterministic by name) ──────────────────────────
 const AVATAR_GRADIENTS = [
@@ -214,6 +214,23 @@ export default function App() {
     const sym = currency === 'USD' ? '$' : currency === 'EUR' ? '€' : currency === 'INR' ? '₹' : currency === 'PKR' ? '₨ ' : '';
     // For PKR, keep spacing/format used elsewhere
     return currency === 'PKR' ? `₨ ${n.toLocaleString('en-PK', opts)}` : `${sym}${formatted}`;
+  }
+
+  // ── Render a PKR-stored amount in the selected display currency ────────────
+  // Amounts are stored in PKR (the base currency). rates[C] = PKR per 1 unit of
+  // C (e.g. USD:285 → 1 USD = 285 PKR), so to show PKR in C we DIVIDE by rate.
+  function renderAmount(pkrAmount) {
+    const n = Number(pkrAmount) || 0;
+    if (displayCurrency === 'PKR') return formatPKR(n);
+    const rate = rates && rates[displayCurrency] ? parseFloat(rates[displayCurrency]) : null;
+    if (!rate || rate <= 0) return formatPKR(n); // no rate → fall back to PKR
+    const converted = n / rate;
+    return (
+      <>
+        <span>{formatCurrency(converted, displayCurrency)}</span>
+        <span style={{ marginLeft: 8, fontSize: '0.9rem', color: 'var(--text-tertiary)' }}>({formatPKR(n)})</span>
+      </>
+    );
   }
 
   useEffect(() => {
@@ -505,27 +522,9 @@ export default function App() {
                   Convert
                 </button>
               </div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                <button className="btn btn-secondary btn-sm" onClick={async () => {
-                  if (!confirm('Bulk-convert all expenses to PKR? A backup will be created.')) return;
-                  try {
-                    const res = await fetch(`${API_BASE}/convert/data`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file: 'expenses', from: convFrom }) });
-                    const data = await res.json();
-                    if (!res.ok) throw new Error(data.error || 'Bulk conversion failed');
-                    showNotification(data.message);
-                    fetchData();
-                  } catch (err) { showNotification(err.message || 'Error', 'error'); }
-                }}>Bulk: Expenses</button>
-                <button className="btn btn-secondary btn-sm" onClick={async () => {
-                  if (!confirm('Bulk-convert all settlements to PKR? A backup will be created.')) return;
-                  try {
-                    const res = await fetch(`${API_BASE}/convert/data`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file: 'settlements', from: convFrom }) });
-                    const data = await res.json();
-                    if (!res.ok) throw new Error(data.error || 'Bulk conversion failed');
-                    showNotification(data.message);
-                    fetchData();
-                  } catch (err) { showNotification(err.message || 'Error', 'error'); }
-                }}>Bulk: Settlements</button>
+              <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: 8, lineHeight: 1.4 }}>
+                Tip: use the <strong>Display</strong> selector (top-right) to view all
+                amounts in another currency — nothing stored is changed.
               </div>
             </div>
           </div>
@@ -650,24 +649,7 @@ export default function App() {
                           <div className="settlement-parties">{s.debtor} → {s.creditor}</div>
                           <div className="settlement-label">Settled up</div>
                         </div>
-                        <span className="settlement-amount">{
-                          displayCurrency === 'PKR' ? (
-                            formatPKR(s.amount)
-                          ) : (
-                            (() => {
-                              const src = displayCurrency;
-                              const rate = rates && rates[src] ? parseFloat(rates[src]) : null;
-                              const orig = Number(s.amount) || 0;
-                              const converted = rate ? (orig * rate) : null;
-                              return (
-                                <>
-                                  <span>{formatCurrency(orig, src)}</span>
-                                  {converted != null && <span style={{ marginLeft: 8, fontSize: '0.9rem', color: 'var(--text-tertiary)' }}>→ ₨ {converted.toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
-                                </>
-                              );
-                            })()
-                          )
-                        }</span>
+                        <span className="settlement-amount">{renderAmount(s.amount)}</span>
                       </div>
                     ))
                   )}
@@ -908,22 +890,7 @@ export default function App() {
                             <div className="timeline-content-header">
                               <div className="timeline-title">{exp.description || 'Untitled Expense'}</div>
                               <div className="timeline-amount" style={{ background: 'var(--grad-primary)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>
-                                {displayCurrency === 'PKR' ? (
-                                  formatPKR(exp.amount)
-                                ) : (
-                                  (() => {
-                                    const src = displayCurrency;
-                                    const rate = rates && rates[src] ? parseFloat(rates[src]) : null;
-                                    const orig = Number(exp.amount) || 0;
-                                    const converted = rate ? (orig * rate) : null;
-                                    return (
-                                      <>
-                                        <span>{formatCurrency(orig, src)}</span>
-                                        {converted != null && <span style={{ marginLeft: 8, fontSize: '0.9rem', color: 'var(--text-tertiary)' }}>→ ₨ {converted.toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
-                                      </>
-                                    );
-                                  })()
-                                )}
+                                {renderAmount(exp.amount)}
                               </div>
                             </div>
                             <div className="timeline-meta">
