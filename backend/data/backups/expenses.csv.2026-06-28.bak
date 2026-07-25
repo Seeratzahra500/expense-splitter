@@ -1,0 +1,3 @@
+id,payer,amount,description,split_between,splits
+699211a62a044398ac7f3819d4c4ff3d,Alice,60.0,Lunch with group,"Alice,Bob,Charlie",
+ce8de5544bba4cb8adf5f4a51f4f2429,Alice,60.0,Dinner,"Bob,Charlie","{""Bob"": 35.0, ""Charlie"": 25.0}"

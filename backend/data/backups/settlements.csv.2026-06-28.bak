@@ -1,0 +1,4 @@
+id,debtor,creditor,amount
+d18aca7f505b455da539e233027edaac,Bob,Alice,20.0
+15daae65a2274ca09645f0d6feac8104,Charlie,Alice,20.0
+a5688c4a3ef948e088c1434c990845fd,Bob,Alice,35.0

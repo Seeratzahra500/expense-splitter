@@ -1,0 +1,16 @@
+/* App.css — Component-specific overrides only */
+/* All core styles live in index.css */
+
+/* Any page-specific extra tweaks can live here */
+.page-view {
+  box-sizing: border-box;
+}
+
+/* Currency converter small UI */
+.currency-converter { }
+.currency-converter .form-input { padding: 8px 10px; font-size: 0.9rem; }
+.currency-converter .btn { padding: 8px 10px; }
+.currency-converter .btn-sm { padding: 6px 10px; font-size: 0.85rem; }
+
+.global-currency-selector select.form-input { width: 110px; padding: 8px 10px; }
+.global-currency-selector label { margin-right: 6px; }
