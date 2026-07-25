@@ -131,12 +131,27 @@ export default function App() {
   const [expenseSplitBetween, setExpenseSplitBetween] = useState([]);
   const [splitType, setSplitType]               = useState('equal');
   const [customSplits, setCustomSplits]         = useState({});
+  const [expenseDate, setExpenseDate]           = useState(() => new Date().toISOString().slice(0, 10));
 
   // Settlement modal
   const [settleModalOpen, setSettleModalOpen]   = useState(false);
   const [settleDebtor, setSettleDebtor]         = useState('');
   const [settleCreditor, setSettleCreditor]     = useState('');
   const [settleAmount, setSettleAmount]         = useState('');
+
+  // Edit expense modal
+  const [editModalOpen, setEditModalOpen]       = useState(false);
+  const [editingExpense, setEditingExpense]     = useState(null);
+  const [editAmount, setEditAmount]             = useState('');
+  const [editDescription, setEditDescription]  = useState('');
+  const [editPayer, setEditPayer]               = useState('');
+  const [editDate, setEditDate]                 = useState('');
+  const [editSplitBetween, setEditSplitBetween]= useState([]);
+  const [editSplitType, setEditSplitType]       = useState('equal');
+  const [editCustomSplits, setEditCustomSplits] = useState({});
+
+  // Search / filter
+  const [searchQuery, setSearchQuery]           = useState('');
   // Currency converter states
   const [convAmount, setConvAmount] = useState('');
   const [convFrom, setConvFrom] = useState('USD');
@@ -255,6 +270,7 @@ export default function App() {
       payload.splits = splitsObj;
     }
 
+    payload.date = expenseDate;
     try {
       const res  = await fetch(`${API_BASE}/expense/add`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
@@ -264,6 +280,7 @@ export default function App() {
       showNotification('Expense recorded!');
       setExpenseAmount(''); setExpenseDescription(''); setCustomSplits({});
       setSplitType('equal'); setExpenseSplitBetween([...people]);
+      setExpenseDate(new Date().toISOString().slice(0, 10));
       fetchData();
     } catch (err) { showNotification(err.message, 'error'); }
   };
@@ -290,6 +307,79 @@ export default function App() {
     setSettleDebtor(debtor); setSettleCreditor(creditor);
     setSettleAmount(amt.toFixed(2)); setSettleModalOpen(true);
   };
+
+  // ── Edit / Delete Expense ─────────────────────────────────────────────────
+  const openEditModal = (exp) => {
+    setEditingExpense(exp);
+    setEditAmount(String(exp.amount));
+    setEditDescription(exp.description);
+    setEditPayer(exp.payer);
+    setEditDate(exp.date || new Date().toISOString().slice(0, 10));
+    const isCustom = exp.splits && Object.keys(exp.splits).length > 0;
+    setEditSplitType(isCustom ? 'custom' : 'equal');
+    setEditSplitBetween(isCustom ? Object.keys(exp.splits) : [...exp.split_between]);
+    setEditCustomSplits(isCustom ? { ...exp.splits } : {});
+    setEditModalOpen(true);
+  };
+
+  const handleEditExpense = async (e) => {
+    e.preventDefault();
+    const amount = parseFloat(editAmount);
+    if (isNaN(amount) || amount <= 0) return showNotification('Enter a valid amount > 0', 'error');
+    if (!editPayer) return showNotification('Select a payer', 'error');
+
+    const payload = { payer: editPayer, amount, description: editDescription.trim(), date: editDate };
+    if (editSplitType === 'custom') {
+      const splitsObj = {};
+      editSplitBetween.forEach(p => { splitsObj[p] = parseFloat(editCustomSplits[p]) || 0; });
+      const sum = Object.values(splitsObj).reduce((a, b) => a + b, 0);
+      if (Math.abs(sum - amount) > 0.01) return showNotification(`Splits total (${formatPKR(sum)}) ≠ amount (${formatPKR(amount)})`, 'error');
+      payload.splits = splitsObj;
+    } else {
+      if (editSplitBetween.length === 0) return showNotification('Select at least one person', 'error');
+      payload.split_between = editSplitBetween;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/expense/${editingExpense.id}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to update expense');
+      showNotification('Expense updated!');
+      setEditModalOpen(false); setEditingExpense(null);
+      fetchData();
+    } catch (err) { showNotification(err.message, 'error'); }
+  };
+
+  const handleDeleteExpense = async (expId, desc) => {
+    if (!confirm(`Delete "${desc || 'this expense'}"? This cannot be undone.`)) return;
+    try {
+      const res = await fetch(`${API_BASE}/expense/${expId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to delete expense');
+      showNotification('Expense deleted.');
+      fetchData();
+    } catch (err) { showNotification(err.message, 'error'); }
+  };
+
+  // Edit modal custom-split helpers
+  const editCustomSplitsSum = editSplitBetween.reduce((s, p) => s + (parseFloat(editCustomSplits[p]) || 0), 0);
+  const editTotalNum = parseFloat(editAmount);
+  const editSplitsSumMatches = !isNaN(editTotalNum) && editTotalNum > 0 && Math.abs(editCustomSplitsSum - editTotalNum) <= 0.01;
+  const editShowSplitWarning = editSplitType === 'custom' && !isNaN(editTotalNum) && editTotalNum > 0 && Math.abs(editCustomSplitsSum - editTotalNum) > 0.01;
+
+  // ── Filter expenses by search query ─────────────────────────────────────
+  const filteredExpenses = expenses.filter(exp => {
+    const q = searchQuery.toLowerCase();
+    if (!q) return true;
+    return (
+      (exp.description || '').toLowerCase().includes(q) ||
+      (exp.payer || '').toLowerCase().includes(q) ||
+      (exp.date || '').includes(q) ||
+      String(exp.amount).includes(q)
+    );
+  });
 
   // ── Checkbox helpers ──────────────────────────────────────────────────────
   const handleCheckboxChange = (person) => {
@@ -659,6 +749,17 @@ export default function App() {
                     </div>
 
                     <div className="form-group">
+                      <label className="form-label">Date</label>
+                      <input
+                        className="form-input"
+                        type="date"
+                        value={expenseDate}
+                        onChange={e => setExpenseDate(e.target.value)}
+                        required
+                      />
+                    </div>
+
+                    <div className="form-group">
                       <label className="form-label">Split Method</label>
                       <div className="split-toggle-wrapper">
                         <button type="button" className={`split-toggle-btn ${splitType === 'equal' ? 'active' : ''}`} onClick={() => setSplitType('equal')}>
@@ -759,9 +860,24 @@ export default function App() {
 
               {/* Expense log timeline */}
               <div>
-                <div className="flex-between" style={{ marginBottom: '16px' }}>
+                <div className="flex-between" style={{ marginBottom: '12px' }}>
                   <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.1rem', fontWeight: 700 }}>Expense Log</h2>
-                  <span style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>{expenses.length} entries</span>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>{filteredExpenses.length}/{expenses.length} entries</span>
+                </div>
+
+                {/* Search bar */}
+                <div style={{ marginBottom: '14px', position: 'relative' }}>
+                  <svg style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', width: 15, height: 15, color: 'var(--text-muted)', pointerEvents: 'none' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+                  </svg>
+                  <input
+                    className="form-input"
+                    type="text"
+                    placeholder="Search by description, payer, date or amount…"
+                    value={searchQuery}
+                    onChange={e => setSearchQuery(e.target.value)}
+                    style={{ paddingLeft: '36px' }}
+                  />
                 </div>
 
                 {expenses.length === 0 ? (
@@ -770,9 +886,15 @@ export default function App() {
                     <div className="empty-state-title">No expenses yet</div>
                     <div className="empty-state-desc">Record your first group expense.</div>
                   </div>
+                ) : filteredExpenses.length === 0 ? (
+                  <div className="card card-body empty-state">
+                    <div className="empty-state-icon" style={{ fontSize: '1.6rem' }}>🔍</div>
+                    <div className="empty-state-title">No results</div>
+                    <div className="empty-state-desc">No expenses match your search.</div>
+                  </div>
                 ) : (
                   <div className="timeline">
-                    {expenses.map((exp, i) => {
+                    {filteredExpenses.map((exp, i) => {
                       const isCustom = exp.splits && Object.keys(exp.splits).length > 0;
                       const dotColor = getAvatarGradient(exp.payer);
                       return (
@@ -784,32 +906,33 @@ export default function App() {
                           </div>
                           <div className="timeline-content">
                             <div className="timeline-content-header">
-                                        <div className="timeline-title">{exp.description || 'Untitled Expense'}</div>
-                                        <div className="timeline-amount" style={{ background: 'var(--grad-primary)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>
-                                          {displayCurrency === 'PKR' ? (
-                                            formatPKR(exp.amount)
-                                          ) : (
-                                            (() => {
-                                              const src = displayCurrency;
-                                              const rate = rates && rates[src] ? parseFloat(rates[src]) : null;
-                                              const orig = Number(exp.amount) || 0;
-                                              const converted = rate ? (orig * rate) : null;
-                                              return (
-                                                <>
-                                                  <span>{formatCurrency(orig, src)}</span>
-                                                  {converted != null && <span style={{ marginLeft: 8, fontSize: '0.9rem', color: 'var(--text-tertiary)' }}>→ ₨ {converted.toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
-                                                </>
-                                              );
-                                            })()
-                                          )}
-                                        </div>
+                              <div className="timeline-title">{exp.description || 'Untitled Expense'}</div>
+                              <div className="timeline-amount" style={{ background: 'var(--grad-primary)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>
+                                {displayCurrency === 'PKR' ? (
+                                  formatPKR(exp.amount)
+                                ) : (
+                                  (() => {
+                                    const src = displayCurrency;
+                                    const rate = rates && rates[src] ? parseFloat(rates[src]) : null;
+                                    const orig = Number(exp.amount) || 0;
+                                    const converted = rate ? (orig * rate) : null;
+                                    return (
+                                      <>
+                                        <span>{formatCurrency(orig, src)}</span>
+                                        {converted != null && <span style={{ marginLeft: 8, fontSize: '0.9rem', color: 'var(--text-tertiary)' }}>→ ₨ {converted.toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
+                                      </>
+                                    );
+                                  })()
+                                )}
+                              </div>
                             </div>
                             <div className="timeline-meta">
                               Paid by <strong style={{ color: 'var(--text-secondary)' }}>{exp.payer}</strong>
                               {' · '}
                               Split with {exp.split_between.join(', ')}
+                              {exp.date && <span style={{ marginLeft: 6, opacity: 0.7 }}>· 📅 {exp.date}</span>}
                             </div>
-                            <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                               <span
                                 className="timeline-tag"
                                 style={{
@@ -825,6 +948,24 @@ export default function App() {
                                   {formatPKR(exp.amount / exp.split_between.length)} each
                                 </span>
                               )}
+                              <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                                <button
+                                  className="btn btn-secondary btn-sm"
+                                  style={{ padding: '4px 10px', fontSize: '0.75rem' }}
+                                  onClick={() => openEditModal(exp)}
+                                  title="Edit expense"
+                                >
+                                  ✏️ Edit
+                                </button>
+                                <button
+                                  className="btn btn-sm"
+                                  style={{ padding: '4px 10px', fontSize: '0.75rem', background: 'rgba(239,68,68,0.12)', color: 'var(--danger)', border: '1px solid rgba(239,68,68,0.25)' }}
+                                  onClick={() => handleDeleteExpense(exp.id, exp.description)}
+                                  title="Delete expense"
+                                >
+                                  🗑️ Delete
+                                </button>
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -971,6 +1112,137 @@ export default function App() {
               <div className="modal-actions">
                 <button type="button" className="btn btn-secondary" onClick={() => setSettleModalOpen(false)}>Cancel</button>
                 <button type="submit" className="btn btn-success">Confirm Payment</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Edit Expense Modal ──────────────────────────────────────────────── */}
+      {editModalOpen && editingExpense && (
+        <div className="modal-overlay" onClick={() => setEditModalOpen(false)}>
+          <div className="modal-box" style={{ maxWidth: 520 }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
+              <div style={{ width: 44, height: 44, borderRadius: 12, background: 'var(--grad-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '1.2rem' }}>
+                ✏️
+              </div>
+              <div>
+                <div className="modal-title">Edit Expense</div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>Update the expense details</div>
+              </div>
+            </div>
+
+            <form onSubmit={handleEditExpense} className="form-stack">
+              <div className="form-group">
+                <label className="form-label">Description</label>
+                <input className="form-input" type="text" placeholder="e.g. Dinner, Petrol…" value={editDescription} onChange={e => setEditDescription(e.target.value)} required />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Amount (PKR ₨)</label>
+                <input className="form-input" type="number" step="1" min="1" placeholder="0" value={editAmount} onChange={e => setEditAmount(e.target.value)} required />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Paid By</label>
+                <select className="form-input" value={editPayer} onChange={e => setEditPayer(e.target.value)}>
+                  {people.map(p => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Date</label>
+                <input className="form-input" type="date" value={editDate} onChange={e => setEditDate(e.target.value)} required />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Split Method</label>
+                <div className="split-toggle-wrapper">
+                  <button type="button" className={`split-toggle-btn ${editSplitType === 'equal' ? 'active' : ''}`} onClick={() => setEditSplitType('equal')}>
+                    <Icons.Equal /> Equal
+                  </button>
+                  <button type="button" className={`split-toggle-btn ${editSplitType === 'custom' ? 'active' : ''}`} onClick={() => setEditSplitType('custom')}>
+                    <Icons.Sliders /> Custom
+                  </button>
+                </div>
+              </div>
+
+              <div className="form-group">
+                <div className="checklist-controls">
+                  <label className="form-label">Split Between</label>
+                  <button type="button" className="checklist-select-all" onClick={() => {
+                    if (editSplitBetween.length === people.length) { setEditSplitBetween([]); setEditCustomSplits({}); }
+                    else setEditSplitBetween([...people]);
+                  }}>
+                    {editSplitBetween.length === people.length ? 'Deselect All' : 'Select All'}
+                  </button>
+                </div>
+                <div className="people-checklist">
+                  {people.map(person => {
+                    const isChecked = editSplitBetween.includes(person);
+                    return (
+                      <div
+                        key={person}
+                        className={`people-check-item ${isChecked ? 'checked' : ''}`}
+                        onClick={() => {
+                          if (isChecked) {
+                            setEditSplitBetween(prev => prev.filter(p => p !== person));
+                            setEditCustomSplits(prev => { const n = { ...prev }; delete n[person]; return n; });
+                          } else {
+                            setEditSplitBetween(prev => [...prev, person]);
+                          }
+                        }}
+                      >
+                        <div className="people-check-item-left">
+                          <div className={`pill-checkbox ${isChecked ? 'checked' : ''}`}><Icons.Check /></div>
+                          <span className="people-check-name">{person}</span>
+                        </div>
+                        {editSplitType === 'custom' && isChecked && (
+                          <div className="custom-split-input" onClick={e => e.stopPropagation()}>
+                            <span className="custom-split-input-prefix">₨</span>
+                            <input
+                              type="number"
+                              className="custom-split-num"
+                              step="1" min="0" placeholder="0"
+                              value={editCustomSplits[person] || ''}
+                              onChange={e => setEditCustomSplits(prev => ({ ...prev, [person]: e.target.value }))}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {editSplitType === 'equal' && editSplitBetween.length > 0 && (
+                  <div className="split-status-bar" style={{ marginTop: '8px' }}>
+                    <span className="split-status-label">Each person pays</span>
+                    <span className="split-status-value matched">{formatPKR((parseFloat(editAmount) || 0) / editSplitBetween.length)}</span>
+                  </div>
+                )}
+
+                {editSplitType === 'custom' && (
+                  <div style={{ marginTop: '8px' }}>
+                    <div className="split-status-bar">
+                      <span className="split-status-label">Running Total</span>
+                      <span className={`split-status-value ${editSplitsSumMatches ? 'matched' : 'unmatched'}`}>
+                        {formatPKR(editCustomSplitsSum)} / {formatPKR(parseFloat(editAmount) || 0)}
+                      </span>
+                    </div>
+                    {editShowSplitWarning && (
+                      <div className="split-warning-msg" style={{ marginTop: 6 }}>
+                        Splits must add up to {formatPKR(parseFloat(editAmount) || 0)}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="modal-actions">
+                <button type="button" className="btn btn-secondary" onClick={() => setEditModalOpen(false)}>Cancel</button>
+                <button type="submit" className="btn btn-primary" disabled={editSplitType === 'custom' && !editSplitsSumMatches}>
+                  Save Changes
+                </button>
               </div>
             </form>
           </div>

@@ -33,42 +33,57 @@ def init_db():
     if not os.path.exists(EXPENSES_FILE):
         with open(EXPENSES_FILE, mode='w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(['id', 'payer', 'amount', 'description', 'split_between', 'splits'])
+            writer.writerow(['id', 'payer', 'amount', 'description', 'split_between', 'splits', 'date'])
     else:
-        # Migrate existing expenses file to add 'splits' column if missing
+        # Migrate existing expenses file to add 'splits' and 'date' columns if missing
         with open(EXPENSES_FILE, mode='r', encoding='utf-8') as f:
             reader = csv.reader(f)
             header = next(reader, None)
-        if header and 'splits' not in header:
-            rows = []
+        
+        migrated = False
+        rows = []
+        
+        if header:
             with open(EXPENSES_FILE, mode='r', encoding='utf-8') as f:
                 reader = csv.reader(f)
                 header = next(reader)
-                header.append('splits')
+                
+                splits_idx = -1
+                date_idx = -1
+                
+                if 'splits' not in header:
+                    header.append('splits')
+                    splits_idx = len(header) - 1
+                    migrated = True
+                    
+                if 'date' not in header:
+                    header.append('date')
+                    date_idx = len(header) - 1
+                    migrated = True
+                    
                 for row in reader:
-                    # Append empty splits string for older records
-                    row.append('')
+                    # Pad row if columns are missing
+                    while len(row) < len(header):
+                        row.append('')
+                    
+                    # Fill default values if just added
+                    if splits_idx != -1 and not row[splits_idx]:
+                        row[splits_idx] = '{}'
+                    if date_idx != -1 and not row[date_idx]:
+                        row[date_idx] = datetime.now().strftime('%Y-%m-%d')
                     rows.append(row)
-            with open(EXPENSES_FILE, mode='w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerow(header)
-                writer.writerows(rows)
+                    
+            if migrated:
+                _backup_file(EXPENSES_FILE)
+                with open(EXPENSES_FILE, mode='w', newline='', encoding='utf-8') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(header)
+                    writer.writerows(rows)
             
     if not os.path.exists(SETTLEMENTS_FILE):
         with open(SETTLEMENTS_FILE, mode='w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow(['id', 'debtor', 'creditor', 'amount'])
-
-init_db()
-
-# --- Currency conversion rates (to PKR) ---
-# These are safe defaults; clients can provide a custom `rate` when converting.
-RATES_TO_PKR = {
-    'PKR': 1.0,
-    'USD': 280.0,
-    'EUR': 305.0,
-    'INR': 3.4,
-}
 
 def _backup_file(src_path):
     if not os.path.exists(src_path):
@@ -76,13 +91,13 @@ def _backup_file(src_path):
     backups_dir = os.path.join(DATA_DIR, 'backups')
     if not os.path.exists(backups_dir):
         os.makedirs(backups_dir)
-    ts = datetime.utcnow().strftime('%Y-%m-%dT%H%M%SZ')
+    ts = datetime.now(datetime.UTC).strftime('%Y-%m-%dT%H%M%SZ')
     base = os.path.basename(src_path)
     dst = os.path.join(backups_dir, f"{base}.{ts}.bak")
     shutil.copy2(src_path, dst)
     return dst
 
-# Ensure a default exchange rates file exists (rates are PKR per unit of currency)
+# Ensure a default exchange rates file exists
 def ensure_default_rates():
     default = {
         "USD": 285.0,
@@ -95,6 +110,17 @@ def ensure_default_rates():
             json.dump(default, f, indent=2)
 
 ensure_default_rates()
+
+init_db()
+
+# --- Currency conversion rates (to PKR) ---
+# These are safe defaults; clients can provide a custom `rate` when converting.
+RATES_TO_PKR = {
+    'PKR': 1.0,
+    'USD': 280.0,
+    'EUR': 305.0,
+    'INR': 3.4,
+}
 
 # --- Helper Functions to read/write CSV files ---
 
@@ -125,23 +151,45 @@ def read_expenses():
                     splits = json.loads(row['splits'])
                 except Exception:
                     splits = {}
+            
+            date_val = row.get('date', '').strip()
+            if not date_val:
+                date_val = datetime.now().strftime('%Y-%m-%d')
+                
             expenses.append({
                 'id': row['id'],
                 'payer': row['payer'],
                 'amount': round(float(row['amount']), 2),
                 'description': row['description'],
                 'split_between': split_between,
-                'splits': splits
+                'splits': splits,
+                'date': date_val
             })
     return expenses
 
-def write_expense(expense_id, payer, amount, description, split_between, splits=None):
+def write_expense(expense_id, payer, amount, description, split_between, splits=None, date=None):
     with open(EXPENSES_FILE, mode='a', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         split_str = ",".join(split_between)
         import json
         splits_str = json.dumps(splits) if splits else ""
-        writer.writerow([expense_id, payer, amount, description, split_str, splits_str])
+        if not date:
+            date = datetime.now().strftime('%Y-%m-%d')
+        writer.writerow([expense_id, payer, amount, description, split_str, splits_str, date])
+
+def rewrite_expenses(expenses):
+    _backup_file(EXPENSES_FILE)
+    with open(EXPENSES_FILE, mode='w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(['id', 'payer', 'amount', 'description', 'split_between', 'splits', 'date'])
+        for exp in expenses:
+            split_str = ",".join(exp['split_between'])
+            import json
+            splits_str = json.dumps(exp['splits']) if exp.get('splits') else ""
+            date_val = exp.get('date')
+            if not date_val:
+                date_val = datetime.now().strftime('%Y-%m-%d')
+            writer.writerow([exp['id'], exp['payer'], exp['amount'], exp['description'], split_str, splits_str, date_val])
 
 def read_settlements():
     settlements = []
@@ -203,6 +251,7 @@ def add_expense():
     description = data.get('description', '').strip()
     split_between = data.get('split_between')
     splits = data.get('splits') # optional custom splits dict
+    date = data.get('date')
     
     if not payer or amount_val is None:
         return jsonify({'error': 'payer and amount are required fields'}), 400
@@ -258,8 +307,11 @@ def add_expense():
                 return jsonify({'error': f'Split member "{person}" is not registered'}), 400
         splits = {}
         
+    if not date:
+        date = datetime.now().strftime('%Y-%m-%d')
+        
     expense_id = uuid.uuid4().hex
-    write_expense(expense_id, payer, amount, description, split_between, splits)
+    write_expense(expense_id, payer, amount, description, split_between, splits, date)
     return jsonify({
         'message': 'Expense added successfully', 
         'expense': {
@@ -268,9 +320,111 @@ def add_expense():
             'amount': amount,
             'description': description,
             'split_between': split_between,
-            'splits': splits
+            'splits': splits,
+            'date': date
         }
     }), 201
+
+
+@app.route('/expense/<string:expense_id>', methods=['PUT'])
+def edit_expense(expense_id):
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'Request body is required'}), 400
+        
+    payer = data.get('payer')
+    amount_val = data.get('amount')
+    description = data.get('description', '').strip()
+    split_between = data.get('split_between')
+    splits = data.get('splits')
+    date = data.get('date')
+    
+    if not payer or amount_val is None:
+        return jsonify({'error': 'payer and amount are required fields'}), 400
+        
+    try:
+        amount = round(float(amount_val), 2)
+    except ValueError:
+        return jsonify({'error': 'Amount must be a valid number'}), 400
+        
+    if amount <= 0:
+        return jsonify({'error': 'Amount must be greater than 0'}), 400
+        
+    people = read_people()
+    if payer not in people:
+        return jsonify({'error': f'Payer "{payer}" is not registered'}), 400
+        
+    # Process splits if provided, otherwise equal split
+    if splits is not None:
+        if not isinstance(splits, dict):
+            return jsonify({'error': 'splits must be a dictionary'}), 400
+            
+        total_split = 0.0
+        validated_splits = {}
+        for person, split_amount in splits.items():
+            if person not in people:
+                return jsonify({'error': f'Split member "{person}" in splits is not registered'}), 400
+            try:
+                val = float(split_amount)
+                if val < 0:
+                    return jsonify({'error': f'Split amount for "{person}" cannot be negative'}), 400
+                total_split += val
+                validated_splits[person] = round(val, 2)
+            except ValueError:
+                return jsonify({'error': f'Split amount for "{person}" must be a valid number'}), 400
+                
+        if abs(total_split - amount) > 0.01:
+            return jsonify({'error': f'Sum of splits (${total_split:.2f}) must equal total expense amount (${amount:.2f})'}), 400
+            
+        splits = validated_splits
+        split_between = [p for p, val in splits.items() if val > 0]
+    else:
+        if not split_between or not isinstance(split_between, list) or len(split_between) == 0:
+            return jsonify({'error': 'split_between must be a non-empty list of names when custom splits are not provided'}), 400
+            
+        for person in split_between:
+            if person not in people:
+                return jsonify({'error': f'Split member "{person}" is not registered'}), 400
+        splits = {}
+        
+    if not date:
+        date = datetime.now().strftime('%Y-%m-%d')
+        
+    expenses = read_expenses()
+    found = False
+    for exp in expenses:
+        if exp['id'] == expense_id:
+            exp['payer'] = payer
+            exp['amount'] = amount
+            exp['description'] = description
+            exp['split_between'] = split_between
+            exp['splits'] = splits
+            exp['date'] = date
+            found = True
+            break
+            
+    if not found:
+        return jsonify({'error': 'Expense not found'}), 404
+        
+    rewrite_expenses(expenses)
+    return jsonify({'message': 'Expense updated successfully'}), 200
+
+
+@app.route('/expense/<string:expense_id>', methods=['DELETE'])
+def delete_expense(expense_id):
+    try:
+        expenses = read_expenses()
+        initial_len = len(expenses)
+        expenses = [exp for exp in expenses if exp['id'] != expense_id]
+        
+        if len(expenses) == initial_len:
+            return jsonify({'error': 'Expense not found'}), 404
+            
+        rewrite_expenses(expenses)
+        return jsonify({'message': 'Expense deleted successfully'}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 
 @app.route('/expenses', methods=['GET'])
