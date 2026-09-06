@@ -6,6 +6,7 @@ from datetime import datetime
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from werkzeug.exceptions import HTTPException
 from sqlalchemy import create_engine, Column, String, Float, Text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -15,6 +16,22 @@ app = Flask(__name__)
 # Comma-separated origins are supported; defaults to "*" for local dev.
 _origins = os.environ.get('FRONTEND_ORIGIN', '*')
 CORS(app, origins=[o.strip() for o in _origins.split(',')] if _origins != '*' else '*')
+
+
+# ── Error handling ────────────────────────────────────────────────────────────
+# Flask/Werkzeug default error pages are HTML, and an unhandled exception with
+# debug mode on serves an interactive traceback. The frontend always expects
+# JSON, so make sure every error response — expected (404) or not (a DB
+# hiccup, a bug) — comes back as JSON instead of leaking HTML/tracebacks.
+@app.errorhandler(HTTPException)
+def handle_http_exception(e):
+    return jsonify({'error': e.description or e.name}), e.code
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_exception(e):
+    app.logger.exception('Unhandled exception')
+    return jsonify({'error': 'Something went wrong on the server. Please try again.'}), 500
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -606,4 +623,7 @@ def convert_to_pkr():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    # Debug mode exposes Werkzeug's interactive debugger, which can execute
+    # arbitrary code — never enable it unless explicitly opted into locally.
+    debug = os.environ.get('FLASK_DEBUG', '0') == '1'
+    app.run(host='0.0.0.0', port=port, debug=debug)

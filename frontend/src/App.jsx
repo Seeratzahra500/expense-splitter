@@ -3,6 +3,33 @@ import './App.css';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000';
 
+// ── Safe response handling ───────────────────────────────────────────────────
+// The backend always replies with JSON, but the network in between doesn't
+// promise that: a sleeping Render instance can bounce back a plain-text/HTML
+// gateway-timeout page, and a dropped connection throws before any body
+// exists. Route every fetch through here so users only ever see a plain
+// sentence, never a raw "Unexpected token '<'" parse error.
+async function parseResponse(res) {
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+function apiErrorMessage(data, fallback) {
+  return (data && typeof data.error === 'string' && data.error) || fallback;
+}
+
+function friendlyCatchMessage(err, fallback) {
+  // A fetch() network failure (offline, DNS, CORS, server unreachable) throws
+  // a generic "Failed to fetch" TypeError, not our own Error with a message.
+  if (err instanceof TypeError) {
+    return 'Could not reach the server. It may be waking up from sleep — please try again in a few seconds.';
+  }
+  return err.message || fallback;
+}
+
 // ── Avatar gradient palette (deterministic by name) ──────────────────────────
 const AVATAR_GRADIENTS = [
   'linear-gradient(135deg, #7a1f3a 0%, #236b52 100%)', // wine → teal
@@ -175,15 +202,17 @@ export default function App() {
         fetch(`${API_BASE}/expenses`),
         fetch(`${API_BASE}/balances`),
       ]);
-      if (!pRes.ok || !eRes.ok || !bRes.ok) throw new Error('Failed to fetch data');
-      const [pData, eData, bData] = await Promise.all([pRes.json(), eRes.json(), bRes.json()]);
+      const [pData, eData, bData] = await Promise.all([parseResponse(pRes), parseResponse(eRes), parseResponse(bRes)]);
+      if (!pRes.ok || !eRes.ok || !bRes.ok || !pData || !eData || !bData) {
+        throw new Error('Failed to load data from the server');
+      }
       setPeople(pData);
       setExpenses([...eData].reverse());
       setDebts(bData.debts || []);
       setIndividualBalances(bData.balances || {});
       setSettlements([...(bData.settlements || [])].reverse());
     } catch (err) {
-      showNotification(err.message || 'Error connecting to server', 'error');
+      showNotification(friendlyCatchMessage(err, 'Error connecting to server'), 'error');
     } finally {
       setLoading(false);
     }
@@ -197,8 +226,8 @@ export default function App() {
       try {
         const res = await fetch(`${API_BASE}/rates`);
         if (!res.ok) return;
-        const data = await res.json();
-        setRates(data || {});
+        const data = await parseResponse(res);
+        if (data) setRates(data);
       } catch (e) { /* ignore */ }
     })();
   }, []);
@@ -256,12 +285,12 @@ export default function App() {
       const res  = await fetch(`${API_BASE}/people/add`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to add person');
+      const data = await parseResponse(res);
+      if (!res.ok) throw new Error(apiErrorMessage(data, 'Failed to add person'));
       showNotification(`✓ ${name} added to the group!`);
       setNewPersonName('');
       fetchData();
-    } catch (err) { showNotification(err.message, 'error'); }
+    } catch (err) { showNotification(friendlyCatchMessage(err, 'Failed to add person'), 'error'); }
   };
 
   // ── Add Expense ───────────────────────────────────────────────────────────
@@ -292,14 +321,14 @@ export default function App() {
       const res  = await fetch(`${API_BASE}/expense/add`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to add expense');
+      const data = await parseResponse(res);
+      if (!res.ok) throw new Error(apiErrorMessage(data, 'Failed to add expense'));
       showNotification('Expense recorded!');
       setExpenseAmount(''); setExpenseDescription(''); setCustomSplits({});
       setSplitType('equal'); setExpenseSplitBetween([...people]);
       setExpenseDate(new Date().toISOString().slice(0, 10));
       fetchData();
-    } catch (err) { showNotification(err.message, 'error'); }
+    } catch (err) { showNotification(friendlyCatchMessage(err, 'Failed to add expense'), 'error'); }
   };
 
   // ── Settle Debt ───────────────────────────────────────────────────────────
@@ -312,12 +341,12 @@ export default function App() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ debtor: settleDebtor, creditor: settleCreditor, amount }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to settle');
+      const data = await parseResponse(res);
+      if (!res.ok) throw new Error(apiErrorMessage(data, 'Failed to settle'));
       showNotification(`Settlement of ${formatPKR(amount)} recorded!`);
       setSettleModalOpen(false); setSettleAmount('');
       fetchData();
-    } catch (err) { showNotification(err.message, 'error'); }
+    } catch (err) { showNotification(friendlyCatchMessage(err, 'Failed to settle'), 'error'); }
   };
 
   const openSettleModal = (debtor, creditor, amt) => {
@@ -361,23 +390,23 @@ export default function App() {
       const res = await fetch(`${API_BASE}/expense/${editingExpense.id}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to update expense');
+      const data = await parseResponse(res);
+      if (!res.ok) throw new Error(apiErrorMessage(data, 'Failed to update expense'));
       showNotification('Expense updated!');
       setEditModalOpen(false); setEditingExpense(null);
       fetchData();
-    } catch (err) { showNotification(err.message, 'error'); }
+    } catch (err) { showNotification(friendlyCatchMessage(err, 'Failed to update expense'), 'error'); }
   };
 
   const handleDeleteExpense = async (expId, desc) => {
     if (!confirm(`Delete "${desc || 'this expense'}"? This cannot be undone.`)) return;
     try {
       const res = await fetch(`${API_BASE}/expense/${expId}`, { method: 'DELETE' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to delete expense');
+      const data = await parseResponse(res);
+      if (!res.ok) throw new Error(apiErrorMessage(data, 'Failed to delete expense'));
       showNotification('Expense deleted.');
       fetchData();
-    } catch (err) { showNotification(err.message, 'error'); }
+    } catch (err) { showNotification(friendlyCatchMessage(err, 'Failed to delete expense'), 'error'); }
   };
 
   // Edit modal custom-split helpers
@@ -511,11 +540,11 @@ export default function App() {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ amount: convAmount, from: convFrom })
                       });
-                      const data = await res.json();
-                      if (!res.ok) throw new Error(data.error || 'Conversion failed');
+                      const data = await parseResponse(res);
+                      if (!res.ok || !data) throw new Error(apiErrorMessage(data, 'Conversion failed'));
                       showNotification(`${data.amount} ${data.from} → ₨ ${data.pkr.toLocaleString('en-PK')}`);
                     } catch (err) {
-                      showNotification(err.message || 'Conversion error', 'error');
+                      showNotification(friendlyCatchMessage(err, 'Conversion error'), 'error');
                     }
                   }}
                 >
@@ -756,9 +785,25 @@ export default function App() {
                     <div className="form-group">
                       <div className="checklist-controls">
                         <label className="form-label">Split Between</label>
-                        <button type="button" className="checklist-select-all" onClick={toggleSelectAll}>
-                          {expenseSplitBetween.length === people.length ? 'Deselect All' : 'Select All'}
-                        </button>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          {expenseSplitBetween.includes(expensePayer) ? (
+                            <button
+                              type="button"
+                              className="checklist-select-all"
+                              title="Use this when you paid entirely for someone else and aren't part of the split yourself"
+                              onClick={() => handleCheckboxChange(expensePayer)}
+                            >
+                              Paid for others only
+                            </button>
+                          ) : (
+                            <button type="button" className="checklist-select-all" onClick={() => handleCheckboxChange(expensePayer)}>
+                              Include myself
+                            </button>
+                          )}
+                          <button type="button" className="checklist-select-all" onClick={toggleSelectAll}>
+                            {expenseSplitBetween.length === people.length ? 'Deselect All' : 'Select All'}
+                          </button>
+                        </div>
                       </div>
 
                       <div className="people-checklist">
@@ -1137,12 +1182,35 @@ export default function App() {
               <div className="form-group">
                 <div className="checklist-controls">
                   <label className="form-label">Split Between</label>
-                  <button type="button" className="checklist-select-all" onClick={() => {
-                    if (editSplitBetween.length === people.length) { setEditSplitBetween([]); setEditCustomSplits({}); }
-                    else setEditSplitBetween([...people]);
-                  }}>
-                    {editSplitBetween.length === people.length ? 'Deselect All' : 'Select All'}
-                  </button>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    {editSplitBetween.includes(editPayer) ? (
+                      <button
+                        type="button"
+                        className="checklist-select-all"
+                        title="Use this when the payer isn't part of the split themselves"
+                        onClick={() => {
+                          setEditSplitBetween(prev => prev.filter(p => p !== editPayer));
+                          setEditCustomSplits(prev => { const n = { ...prev }; delete n[editPayer]; return n; });
+                        }}
+                      >
+                        Paid for others only
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="checklist-select-all"
+                        onClick={() => setEditSplitBetween(prev => [...prev, editPayer])}
+                      >
+                        Include payer
+                      </button>
+                    )}
+                    <button type="button" className="checklist-select-all" onClick={() => {
+                      if (editSplitBetween.length === people.length) { setEditSplitBetween([]); setEditCustomSplits({}); }
+                      else setEditSplitBetween([...people]);
+                    }}>
+                      {editSplitBetween.length === people.length ? 'Deselect All' : 'Select All'}
+                    </button>
+                  </div>
                 </div>
                 <div className="people-checklist">
                   {people.map(person => {

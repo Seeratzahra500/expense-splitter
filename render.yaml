@@ -1,4 +1,6 @@
-# Render Blueprint — provisions the Flask API + a free Postgres database.
+# Render Blueprint — provisions the Flask API only.
+# Database is Neon (free, doesn't expire) — set DATABASE_URL manually in the
+# Render dashboard after deploying. See DEPLOY.md.
 # In the Render dashboard: New → Blueprint → point at this repo.
 services:
   - type: web
@@ -12,12 +14,6 @@ services:
       - key: PYTHON_VERSION
         value: "3.12.7"
       - key: DATABASE_URL
-        fromDatabase:
-          name: expense-splitter-db
-          property: connectionString
+        sync: false   # set to your Neon connection string
       - key: FRONTEND_ORIGIN
         sync: false   # set to your Vercel URL after the frontend deploys
-
-databases:
-  - name: expense-splitter-db
-    plan: free

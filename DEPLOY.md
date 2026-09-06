@@ -22,30 +22,37 @@ git push -u origin main
 
 ---
 
-## 1. Backend → Render (with persistent Postgres)
+## 1. Database → Neon (free Postgres, doesn't expire)
 
-The repo includes `render.yaml`, which provisions the web service **and** a
-free Postgres database automatically.
+Render's own free Postgres tier auto-deletes the database after 30 days —
+that's why the old setup died. Neon's free tier has no expiry (it just
+autosuspends when idle and wakes instantly on the next query).
 
-1. Render dashboard → **New → Blueprint** → select this repo.
-2. Render reads `render.yaml` and shows: `expense-splitter-api` (web) +
-   `expense-splitter-db` (Postgres). Click **Apply**.
-3. `DATABASE_URL` is wired to the database automatically. Leave
-   `FRONTEND_ORIGIN` blank for now (defaults to `*`).
-4. Wait for the first deploy, then copy the service URL, e.g.
+1. [neon.tech](https://neon.tech) → sign up → **New Project** →
+   name it `expense-splitter`.
+2. Copy the connection string shown (starts with `postgresql://...`).
+
+## 2. Backend → Render
+
+The repo includes `render.yaml`, which provisions the web service.
+
+1. Render dashboard → **New → Blueprint** → select this repo → **Apply**.
+2. Render → `expense-splitter-api` → **Environment** → set `DATABASE_URL`
+   to the Neon connection string from step 1.2. Leave `FRONTEND_ORIGIN`
+   blank for now (defaults to `*`).
+3. Wait for the deploy, then copy the service URL, e.g.
    `https://expense-splitter-api.onrender.com`.
-5. Sanity check: open `<url>/health` → should return `{"status":"ok"}`.
+4. Sanity check: open `<url>/health` → should return `{"status":"ok"}`.
 
 **Prefer the manual route?** New → Web Service → this repo, then set:
 - Root Directory: `backend`
 - Build: `pip install -r requirements.txt`
 - Start: `gunicorn app:app --bind 0.0.0.0:$PORT`
-- Add a Postgres instance separately and set `DATABASE_URL` to its
-  Internal Connection String.
+- Set `DATABASE_URL` to the Neon connection string.
 
-> Free tier note: the web service sleeps after ~15 min idle (first request
-> after wakes it, ~30 s). **Data now lives in Postgres, so it persists** across
-> restarts and redeploys — the old CSV-on-disk problem is gone.
+> Free tier note: the Render web service sleeps after ~15 min idle (first
+> request after wakes it, ~30 s). Data lives in Neon Postgres, so it
+> persists across restarts and redeploys.
 
 ---
 
@@ -92,7 +99,7 @@ Local `VITE_API_BASE` is optional — it defaults to `http://localhost:5000`.
 
 | Where   | Variable          | Purpose                                             |
 |---------|-------------------|-----------------------------------------------------|
-| Render  | `DATABASE_URL`    | Postgres connection (auto-set by `render.yaml`)     |
+| Render  | `DATABASE_URL`    | Neon Postgres connection string (set manually)      |
 | Render  | `FRONTEND_ORIGIN` | Allowed CORS origin(s); defaults to `*`             |
 | Render  | `PORT`            | Set by Render automatically                         |
 | Vercel  | `VITE_API_BASE`   | Backend URL the frontend calls                      |
