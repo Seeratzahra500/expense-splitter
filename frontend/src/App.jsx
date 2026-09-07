@@ -560,10 +560,33 @@ export default function App() {
         </div>
       </aside>
 
+      {/* ── Mobile top bar + bottom tab nav (sidebar is hidden below 768px) ── */}
+      <div className="mobile-topbar">
+        <div className="sidebar-logo-text">
+          <div className="sidebar-logo-title">SplitWise</div>
+        </div>
+      </div>
+      <nav className="mobile-tabbar">
+        {navItems.map(item => {
+          const IconComp = Icons[item.icon];
+          return (
+            <button
+              key={item.id}
+              className={`mobile-tabbar-item ${currentPage === item.id ? 'active' : ''}`}
+              onClick={() => setCurrentPage(item.id)}
+            >
+              <IconComp />
+              <span>{item.label}</span>
+              {item.badge != null && <span className="mobile-tabbar-badge">{item.badge}</span>}
+            </button>
+          );
+        })}
+      </nav>
+
       {/* ── Main Content ─────────────────────────────────────────────── */}
       <main className="main-content">
 
-        <div className="global-currency-selector" style={{ display: 'flex', justifyContent: 'flex-end', padding: '12px 40px 0' }}>
+        <div className="global-currency-selector">
           <label style={{ fontSize: '0.85rem', color: 'var(--text-tertiary)', marginRight: 8, alignSelf: 'center' }}>Display:</label>
           <select className="form-input" value={displayCurrency} onChange={e => setDisplayCurrency(e.target.value)} style={{ width: 120 }}>
             {Object.keys(rates).length > 0 ? Object.keys(rates).map(c => <option key={c}>{c}</option>) : (
